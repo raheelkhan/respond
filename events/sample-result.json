@@ -1,0 +1,13 @@
+{
+  "video": "interview-0042.mp4",
+  "durationSeconds": 212,
+  "frames": [
+    { "t": 0.0, "objects": [{ "label": "person", "score": 0.98, "box": [12, 44, 180, 390] }] },
+    { "t": 0.5, "objects": [{ "label": "person", "score": 0.97, "box": [14, 45, 181, 392] }] },
+    { "t": 1.0, "objects": [{ "label": "person", "score": 0.96, "box": [15, 46, 183, 394] }] }
+  ],
+  "transcript": [
+    { "start": 0.2, "end": 0.9, "word": "hello", "confidence": 0.99 },
+    { "start": 1.0, "end": 1.6, "word": "world", "confidence": 0.98 }
+  ]
+}
