@@ -1,0 +1,8 @@
+node_modules
+coverage
+dist
+tests
+jest.config.js
+.eslintrc.js
+.eslintignore
+.prettierrc.js

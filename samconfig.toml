@@ -16,6 +16,7 @@ lint = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 resolve_s3 = true
+resolve_image_repos = true
 
 [default.package.parameters]
 resolve_s3 = true
