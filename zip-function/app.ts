@@ -1,12 +1,14 @@
 import { PassThrough, Readable } from 'node:stream';
-import { S3Event } from 'aws-lambda';
+import { Context, S3Event } from 'aws-lambda';
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { Logger } from '@aws-lambda-powertools/logger';
 import archiver from 'archiver';
 
 const SOURCE_PREFIX = 'incoming/';
 const ARCHIVE_PREFIX = 'archive/';
 
+const logger = new Logger();
 const s3 = new S3Client({});
 
 /**
@@ -19,8 +21,11 @@ const s3 = new S3Client({});
  *
  * Event doc: https://docs.aws.amazon.com/lambda/latest/dg/with-s3.html
  * @param {Object} event - S3 ObjectCreated event
+ * @param {Object} context - Lambda invocation context
  */
-export const lambdaHandler = async (event: S3Event): Promise<void> => {
+export const lambdaHandler = async (event: S3Event, context: Context): Promise<void> => {
+    logger.addContext(context);
+
     for (const record of event.Records) {
         const bucket = record.s3.bucket.name;
 
@@ -59,12 +64,16 @@ export const lambdaHandler = async (event: S3Event): Promise<void> => {
         // Only once the archive is durably stored do we drop the original.
         await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 
-        console.log({
-            message: 'compressed object',
-            source: `s3://${bucket}/${key}`,
-            archive: `s3://${bucket}/${archiveKey}`,
-            sourceBytes: record.s3.object.size,
-            compressedBytes: archive.pointer(),
+        const sourceBytes = record.s3.object.size;
+        const compressedBytes = archive.pointer();
+
+        logger.info('compressed object', {
+            bucket,
+            sourceKey: key,
+            archiveKey,
+            sourceBytes,
+            compressedBytes,
+            savedPercent: Math.round((1 - compressedBytes / sourceBytes) * 100),
         });
     }
 };

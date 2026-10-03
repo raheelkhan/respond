@@ -8,13 +8,16 @@ import {
 } from '@aws-sdk/client-s3';
 import { mockClient } from 'aws-sdk-client-mock';
 import AdmZip from 'adm-zip';
-import { S3Event } from 'aws-lambda';
+import { Context, S3Event } from 'aws-lambda';
 
 import { lambdaHandler } from '../../app';
 
 const s3Mock = mockClient(S3Client);
 
 const BUCKET = 'test-bucket';
+const CONTEXT = { awsRequestId: 'test-request-id', functionName: 'zip-function' } as Context;
+
+const invoke = (e: S3Event) => lambdaHandler(e, CONTEXT);
 const PAYLOAD = JSON.stringify({ frames: Array.from({ length: 500 }, (_, i) => i) });
 
 const event = (key: string): S3Event =>
@@ -54,7 +57,7 @@ describe('lambdaHandler', () => {
     it('writes a real zip containing the source object', async () => {
         const uploads = captureUploads();
 
-        await lambdaHandler(event('incoming/result.json'));
+        await invoke(event('incoming/result.json'));
 
         expect(uploads).toHaveLength(1);
         expect(uploads[0].key).toBe('archive/result.json.zip');
@@ -70,7 +73,7 @@ describe('lambdaHandler', () => {
     it('compresses to fewer bytes than the source', async () => {
         const uploads = captureUploads();
 
-        await lambdaHandler(event('incoming/result.json'));
+        await invoke(event('incoming/result.json'));
 
         expect(uploads[0].body.length).toBeLessThan(PAYLOAD.length);
     });
@@ -86,7 +89,7 @@ describe('lambdaHandler', () => {
             return {};
         });
 
-        await lambdaHandler(event('incoming/result.json'));
+        await invoke(event('incoming/result.json'));
 
         expect(order).toEqual(['put', 'delete']);
         const deletes = s3Mock.commandCalls(DeleteObjectCommand);
@@ -96,14 +99,14 @@ describe('lambdaHandler', () => {
     it('does not delete the original when the upload fails', async () => {
         s3Mock.on(PutObjectCommand).rejects(new Error('upload boom'));
 
-        await expect(lambdaHandler(event('incoming/result.json'))).rejects.toThrow('upload boom');
+        await expect(invoke(event('incoming/result.json'))).rejects.toThrow('upload boom');
         expect(s3Mock.commandCalls(DeleteObjectCommand)).toHaveLength(0);
     });
 
     it('decodes url-encoded keys before fetching', async () => {
         const uploads = captureUploads();
 
-        await lambdaHandler(event('incoming/my+report%40v2.json'));
+        await invoke(event('incoming/my+report%40v2.json'));
 
         const get = s3Mock.commandCalls(GetObjectCommand)[0].args[0].input;
         expect(get.Key).toBe('incoming/my report@v2.json');
@@ -116,7 +119,7 @@ describe('lambdaHandler', () => {
         const batched = event('incoming/a.json');
         batched.Records.push(event('incoming/b.json').Records[0]);
 
-        await lambdaHandler(batched);
+        await invoke(batched);
 
         expect(uploads.map((u) => u.key)).toEqual(['archive/a.json.zip', 'archive/b.json.zip']);
     });

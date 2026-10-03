@@ -9,7 +9,7 @@
 #   --profile  AWS profile (falls back to AWS_PROFILE / default chain)
 #   --file     payload to upload      (default: events/sample-result.json)
 #   --key      key name under incoming/ (default: sample-<timestamp>.json)
-#   --clean    empty the bucket and delete the log group, then exit
+#   --clean    empty the bucket and clear log streams, then exit
 set -euo pipefail
 
 PROFILE=""
@@ -51,9 +51,17 @@ if [ "$CLEAN" -eq 1 ]; then
     aws_ s3 rm "s3://${BUCKET}" --recursive
 
     if group=$(log_group); then
-        echo "deleting ${group}"
-        aws_ logs delete-log-group --log-group-name "$group" 2>/dev/null \
-            || echo "  (no log group to delete)"
+        echo "clearing streams in ${group}"
+        streams=$(aws_ logs describe-log-streams --log-group-name "$group" \
+            --query 'logStreams[].logStreamName' --output text 2>/dev/null) || streams=""
+        if [ -z "$streams" ]; then
+            echo "  (nothing to clear)"
+        else
+            for stream in $streams; do
+                aws_ logs delete-log-stream --log-group-name "$group" \
+                    --log-stream-name "$stream"
+            done
+        fi
     fi
 
     echo "clean"

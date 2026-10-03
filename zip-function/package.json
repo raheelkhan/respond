@@ -13,6 +13,7 @@
     "test": "npm run compile && npm run unit"
   },
   "dependencies": {
+    "@aws-lambda-powertools/logger": "^2.35.0",
     "@aws-sdk/client-s3": "^3.670.0",
     "@aws-sdk/lib-storage": "^3.670.0",
     "archiver": "^7.0.1",
