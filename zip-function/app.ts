@@ -39,7 +39,7 @@ export const lambdaHandler = async (event: S3Event, context: Context): Promise<v
             throw new Error(`Unexpected body type for s3://${bucket}/${key}`);
         }
 
-        const archive = archiver('zip', { zlib: { level: 9 } });
+        const archive = archiver('zip', { zlib: { level: 6 } });
         archive.append(Body, { name: entryName });
 
         // archiver extends Transform from the `readable-stream` package, which

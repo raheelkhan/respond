@@ -103,7 +103,7 @@ Resources:
       AutoPublishAlias: live
       Architectures:
         - x86_64
-      MemorySize: 1024
+      MemorySize: 1769
       Timeout: 60
       Environment:
         Variables:
