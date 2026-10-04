@@ -1,127 +1,175 @@
-# respond
+# S3 object compression
 
-This project contains source code and supporting files for a serverless application that you can deploy with the SAM CLI. It includes the following files and folders.
+A Lambda that zips JSON files as they land in S3.
 
-- hello-world - Code for the application's Lambda function written in TypeScript.
-- events - Invocation events that you can use to invoke the function.
-- hello-world/tests - Unit tests for the application code. 
-- template.yaml - A template that defines the application's AWS resources.
+Drop a `.json` into `incoming/`, the function streams it into a ZIP under
+`archive/` and deletes the original.
 
-The application uses several AWS resources, including Lambda functions and an API Gateway API. These resources are defined in the `template.yaml` file in this project. You can update the template to add AWS resources through the same deployment process that updates your application code.
+## Contents
 
-If you prefer to use an integrated development environment (IDE) to build and test your application, you can use the AWS Toolkit.  
-The AWS Toolkit is an open source plug-in for popular IDEs that uses the SAM CLI to build and deploy serverless applications on AWS. The AWS Toolkit also adds a simplified step-through debugging experience for Lambda function code. See the following links to get started.
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Deploy](#deploy)
+- [Test](#test)
+- [Rollback](#rollback)
+- [Cost analysis](#cost-analysis)
+  - [Why 1769 MB](#why-1769-mb)
+  - [Storage](#storage)
+- [Saving more](#saving-more)
+- [If it has to run in AWS](#if-it-has-to-run-in-aws)
+- [What I would actually do](#what-i-would-actually-do)
 
-* [CLion](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [GoLand](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [IntelliJ](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [WebStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [Rider](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PhpStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PyCharm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [RubyMine](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [DataGrip](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [VS Code](https://docs.aws.amazon.com/toolkit-for-vscode/latest/userguide/welcome.html)
-* [Visual Studio](https://docs.aws.amazon.com/toolkit-for-visual-studio/latest/user-guide/welcome.html)
+## Architecture
 
-## Deploy the sample application
+Everything lives in `template.yaml` and deploys as one CloudFormation stack.
 
-The Serverless Application Model Command Line Interface (SAM CLI) is an extension of the AWS CLI that adds functionality for building and testing Lambda applications. It uses Docker to run your functions in an Amazon Linux environment that matches Lambda. It can also emulate your application's build environment and API.
+- **S3 bucket** `<account-id>-respond-io-source-bucket`. Uploads go to
+  `incoming/`, archives to `archive/`.
+- **Lambda** Node.js 24, container image, private subnets of its own VPC.
+- **S3 gateway endpoint** the only route out. No NAT, no internet gateway.
+- **Alias `live`** each deploy publishes a version and moves the alias, so
+  rollback is one `update-alias` call.
 
-To use the SAM CLI, you need the following tools.
+The archive goes back into the bucket that triggers the function, so the
+event filter is scoped to `prefix: incoming/` and `suffix: .json`. A `.zip`
+in `archive/` can't match it. The IAM policy splits the same way: read and
+delete on `incoming/*`, write on `archive/*`. Two separate guards, because
+a self-triggering Lambda at this volume would be an expensive mistake.
 
-* SAM CLI - [Install the SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
-* Node.js - [Install Node.js 24](https://nodejs.org/en/), including the NPM package management tool.
-* Docker - [Install Docker community edition](https://hub.docker.com/search/?type=edition&offering=community)
 
-To build and deploy your application for the first time, run the following in your shell:
+## Prerequisites
 
-```bash
+AWS SAM CLI, Docker, Node.js 24, AWS credentials.
+
+## Deploy
+
+```sh
+cd zip-function && npm install && cd ..
 sam build
-sam deploy --guided
+sam deploy --profile <your-profile>
 ```
 
-The first command will build the source of your application. The second command will package and deploy your application to AWS, with a series of prompts:
+## Test
 
-* **Stack Name**: The name of the stack to deploy to CloudFormation. This should be unique to your account and region, and a good starting point would be something matching your project name.
-* **AWS Region**: The AWS region you want to deploy your app to.
-* **Confirm changes before deploy**: If set to yes, any change sets will be shown to you before execution for manual review. If set to no, the AWS SAM CLI will automatically deploy application changes.
-* **Allow SAM CLI IAM role creation**: Many AWS SAM templates, including this example, create AWS IAM roles required for the AWS Lambda function(s) included to access AWS services. By default, these are scoped down to minimum required permissions. To deploy an AWS CloudFormation stack which creates or modifies IAM roles, the `CAPABILITY_IAM` value for `capabilities` must be provided. If permission isn't provided through this prompt, to deploy this example you must explicitly pass `--capabilities CAPABILITY_IAM` to the `sam deploy` command.
-* **Save arguments to samconfig.toml**: If set to yes, your choices will be saved to a configuration file inside the project, so that in the future you can just re-run `sam deploy` without parameters to deploy changes to your application.
-
-You can find your API Gateway Endpoint URL in the output values displayed after deployment.
-
-## Use the SAM CLI to build and test locally
-
-Build your application with the `sam build` command.
-
-```bash
-respond$ sam build
+```sh
+./scripts/trigger.sh --profile <your-profile>
 ```
 
-The SAM CLI installs dependencies defined in `hello-world/package.json`, compiles TypeScript with esbuild, creates a deployment package, and saves it in the `.aws-sam/build` folder.
+Uploads a sample file, waits for the archive, prints the bucket and the
+logs. It deletes nothing, so you can go and look.
 
-Test a single function by invoking it directly with a test event. An event is a JSON document that represents the input that the function receives from the event source. Test events are included in the `events` folder in this project.
+`--clean` empties the bucket and clears the log streams.
 
-Run functions locally and invoke them with the `sam local invoke` command.
+Unit tests: `cd zip-function && npm test`.
 
-```bash
-respond$ sam local invoke HelloWorldFunction --event events/event.json
+## Rollback
+
+```sh
+aws lambda update-alias \
+  --function-name <function-name> \
+  --name live \
+  --function-version <previous-version>
 ```
 
-The SAM CLI can also emulate your application's API. Use the `sam local start-api` to run the API locally on port 3000.
+The S3 notification points at the alias, so this takes effect immediately.
+Versions survive stack updates.
 
-```bash
-respond$ sam local start-api
-respond$ curl http://localhost:3000/
-```
+## Cost analysis
 
-The SAM CLI reads the application template to determine the API's routes and the functions that they invoke. The `Events` property on each function's definition includes the route and method for each path.
+At 1,000,000 files an hour (730 million a month) of roughly 10 MB each, in
+`us-east-1`, on S3 Standard.
 
-```yaml
-      Events:
-        HelloWorld:
-          Type: Api
-          Properties:
-            Path: /hello
-            Method: get
-```
+| What we pay for | Unit price | Calculation | Per month |
+|---|---|---|---|
+| Lambda invocations | $0.20 per 1M | 730M requests | $146 |
+| Lambda runtime | $0.0000166667 per GB-s | 1.728 GB x 0.81 s = 1.40 GB-s per file, x 730M | $16,983 |
+| S3 PUT (write archive) | $0.005 per 1,000 | 730M requests | $3,650 |
+| S3 GET (read source) | $0.0004 per 1,000 | 730M requests | $292 |
+| S3 DELETE (remove source) | free | 730M requests | $0 |
+| S3 storage | ~$0.022 per GB | 730M x 1.98 MB = 1.29 PB | $28,897 |
+| **Total** | | | **~$50k** |
 
-## Add a resource to your application
-The application template uses AWS Serverless Application Model (AWS SAM) to define application resources. AWS SAM is an extension of AWS CloudFormation with a simpler syntax for configuring common serverless application resources such as functions, triggers, and APIs. For resources not included in [the SAM specification](https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md), you can use standard [AWS CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html) resource types.
+Networking is free. The gateway endpoint costs nothing, there's no NAT, and
+S3 traffic stays in-region. Logs and the ECR image are a few dollars.
 
-## Fetch, tail, and filter Lambda function logs
+### Why 1769 MB
 
-To simplify troubleshooting, SAM CLI has a command called `sam logs`. `sam logs` lets you fetch logs generated by your deployed Lambda function from the command line. In addition to printing the logs on the terminal, this command has several nifty features to help you quickly find the bug.
+Lambda bills memory multiplied by time, and memory also buys CPU. Zipping is
+CPU work, so a bigger function finishes faster and the bill barely moves.
 
-`NOTE`: This command works for all AWS Lambda functions; not just the ones you deploy using SAM.
+I ran a real 10 MB file at three sizes:
 
-```bash
-respond$ sam logs -n HelloWorldFunction --stack-name respond --tail
-```
+| Memory | Time per file | Cost per month |
+|---|---|---|
+| 1024 MB | 2.05 s | $25,000 |
+| **1769 MB** | **1.21 s** | **$25,300** |
+| 3008 MB | 1.13 s | $40,400 |
 
-You can find more information and examples about filtering Lambda function logs in the [SAM CLI Documentation](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-logging.html).
+1769 MB is where you get a full vCPU. Below it the function is starved and
+just takes longer for the same money. Above it the memory sits idle while
+the function waits on S3, and you pay for it.
 
-## Unit tests
 
-Tests are defined in the `hello-world/tests` folder in this project. Use NPM to install the [Jest test framework](https://jestjs.io/) and run unit tests.
+### Storage
 
-```bash
-respond$ cd hello-world
-hello-world$ npm install
-hello-world$ npm run test
-```
+10 MB in, 2 MB out. A month of archives costs around $28,900. The same data
+uncompressed would be about $150,000, so the compression saves roughly
+$120,000 a month.
 
-## Cleanup
+## Saving more
 
-To delete the sample application that you created, use the AWS CLI. Assuming you used your project name for the stack name, you can run the following:
+**Use a colder S3 tier.** The numbers above assume S3 Standard, which is
+priced for frequent access. These are archives. Glacier or Deep Archive fits
+what they're actually for, and storage is over half the bill. A lifecycle
+rule, and the biggest saving on this list.
 
-```bash
-sam delete --stack-name respond
-```
+**Switch to arm64.** Graviton is about 20% cheaper per GB-second. Roughly
+$3,400 a month for a one-line change.
 
-## Resources
+**Batch files into one archive.** About $3,800 a month off invocations and
+PUTs. Doesn't touch runtime, since the same bytes still get downloaded and
+compressed, and it needs an aggregation layer. Most work, least return.
 
-See the [AWS SAM developer guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html) for an introduction to SAM specification, the SAM CLI, and serverless application concepts.
+**Use tar.gz instead of zip.** A zip compresses each entry separately, so
+batching into one zip buys nothing on size. A tar.gz compresses the batch as
+a whole and would do better.
 
-Next, you can use AWS Serverless Application Repository to deploy ready to use Apps that go beyond hello world samples and learn how authors developed their applications: [AWS Serverless Application Repository main page](https://aws.amazon.com/serverless/serverlessrepo/)
+## If it has to run in AWS
+
+Lambda is a poor fit here. Of the 810 ms billed per file, only about 360 ms
+is compression. The rest is waiting on S3, and Lambda bills for the wait.
+
+A worker with a thread pool doesn't idle like that. One thread zips while
+another downloads.
+
+So: S3 events to SQS, ECS tasks on EC2 pulling batches, several threads per
+task. The actual work is about 73,000 vCPU-hours a month, which is roughly
+144 vCPUs at 70% utilisation.
+
+| Compute option | Per month |
+|---|---|
+| Lambda today | $17,129 |
+| ECS on EC2 on-demand, plus SQS | $5,041 |
+| ECS on EC2, 1 year savings plan | $3,728 |
+| ECS on EC2, spot | $1,758 |
+
+Spot is fine, the job is idempotent and SQS redelivers.
+
+## What I would actually do
+
+Compress on the on-premises server before uploading.
+
+The files are produced there. The machine is already paid for, and zipping a
+JSON file does not need a cloud instance. Compressing at source means
+uploading 2 MB instead of 10 MB, and the whole pipeline in this repo stops
+being necessary.
+
+| | Per month |
+|---|---|
+| This solution, S3 Standard | ~$50,000 |
+| Compress on-prem, S3 Standard | ~$28,900 |
+| Compress on-prem, Glacier Instant Retrieval | ~$5,400 |
+| Compress on-prem, Deep Archive | ~$1,300 |
+
+No Lambda, no extra GET, PUT or DELETE, and 80% less upload bandwidth. What
+remains is storage, and picking the right tier for it.
