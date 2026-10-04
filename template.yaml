@@ -100,6 +100,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       PackageType: Image
+      AutoPublishAlias: live
       Architectures:
         - x86_64
       MemorySize: 1024
